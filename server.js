@@ -2,9 +2,12 @@ const express = require('express')
 const multer = require('multer')
 const { Storage } = require('@google-cloud/storage')
 const QRCode = require('qrcode')
+const path = require('path')
 
 const app = express()
-const port = process.env.PORT || 3000
+const port = process.env.PORT || 5000
+
+app.use(express.static(path.join(__dirname, 'client/build')))
 
 // Initialize Google Cloud Storage client with your credentials
 const storage = new Storage({
@@ -18,6 +21,10 @@ const bucket = storage.bucket(bucketName)
 // Multer configuration for handling file uploads
 const upload = multer({
   storage: multer.memoryStorage(),
+})
+
+app.get('/status', async (req, res) => { 
+  res.json({status: "server is up and running successfully"})
 })
 
 // Endpoint to upload videos to Google Cloud Storage
@@ -37,7 +44,7 @@ app.post('/upload', upload.single('video'), async (req, res) => {
 
   stream.on('error', (err) => {
     console.error(err)
-    res.status(500).json({ error: 'Error uploading the file.' })
+    res.status(500).json({ error: err })
   })
 
   stream.on('finish', () => {
@@ -51,6 +58,9 @@ app.post('/upload', upload.single('video'), async (req, res) => {
 app.get('/videos', async (req, res) => {
   try {
     const [files] = await bucket.getFiles();
+    if (files.length === 0) {
+      return res.json([]);
+     }
     const videos = files.map((file) => ({
       name: file.name,
       url: `https://storage.googleapis.com/${bucketName}/${file.name}`,
@@ -62,6 +72,9 @@ app.get('/videos', async (req, res) => {
   }
 });
 
+app.get('*', (req, res) => {
+  res.sendFile(path.join(__dirname + '/client/build/index.html'))
+})
 
 app.listen(port, () => {
   console.log(`Server is running on port ${port}`)
