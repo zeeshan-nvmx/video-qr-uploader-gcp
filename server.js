@@ -3,6 +3,7 @@ const multer = require('multer')
 const { Storage } = require('@google-cloud/storage')
 const QRCode = require('qrcode')
 const path = require('path')
+const fs = require('fs')
 
 const app = express()
 const port = process.env.PORT || 5000
@@ -18,17 +19,33 @@ const storage = new Storage({
 const bucketName = 'video-qr-bucket' // Replace with your GCS bucket name
 const bucket = storage.bucket(bucketName)
 
-// Multer configuration for handling file uploads
+// // Multer configuration for handling file uploads with memory storage
+// const upload = multer({
+//   storage: multer.memoryStorage(),
+// })
+
+// Multer configuration for handling file uploads with disk storage
 const upload = multer({
-  storage: multer.memoryStorage(),
+  storage: multer.diskStorage({
+    destination: function (req, file, cb) {
+      cb(null, './uploads')
+    },
+    filename: function (req, file, cb) {
+      cb(null, file.originalname.replace(/\s/g, '-').toLowerCase())
+    },
+  }),
+  limits: {
+    fileSize: 1024 * 1024 * 1024 * 5, // Sets the limit to 5GB
+  },
 })
+
 
 app.get('/status', async (req, res) => { 
   res.json({status: "server is up and running successfully"})
 })
 
-// Endpoint to upload videos to Google Cloud Storage
-app.post('/upload', upload.single('video'), async (req, res) => {
+// Endpoint to upload videos to Google Cloud Storage with conjunction with multer memory storage and stream directly to Google Cloud Storage
+/* app.post('/upload', upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded.' })
   }
@@ -52,7 +69,51 @@ app.post('/upload', upload.single('video'), async (req, res) => {
   })
 
   stream.end(req.file.buffer)
+}) */
+
+// Endpoint to upload videos to Google Cloud Storage from disk storage and deleting the local file after successful upload
+
+app.post('/upload', upload.single('video'), async (req, res) => {
+  if (!req.file) {
+    return res.status(400).json({ error: 'No file uploaded.' })
+  }
+
+  const file = bucket.file(req.file.originalname.replace(/\s/g, '-').toLowerCase())
+  const blobStream = file.createWriteStream({
+    metadata: {
+      contentType: req.file.mimetype,
+    },
+    resumable: false,
+  })
+
+  blobStream.on('error', (err) => {
+    console.error(err)
+    return res.status(500).json({ error: 'Error uploading file to Google Cloud Storage.' })
+  })
+
+  blobStream.on('finish', () => {
+    // Delete the local file after successful upload to GCP
+    fs.unlink(req.file.path, (unlinkErr) => {
+      if (unlinkErr) {
+        console.error(unlinkErr)
+        return res.status(500).json({ error: unlinkErr })
+      }
+      // Get the public URL of the uploaded file
+      const publicUrl = `https://storage.googleapis.com/${bucketName}/${file.name}`
+      // Respond with success message and URL
+      res.json({ message: 'Video uploaded successfully to Google Cloud Storage', url: publicUrl })
+    })
+  })
+
+  // Pipe the file's readable stream to the writable stream of Google Cloud Storage
+  fs.createReadStream(req.file.path)
+    .pipe(blobStream)
+    .on('error', (err) => {
+      console.error(err)
+      return res.status(500).json({ error: 'Error uploading file to Google Cloud Storage.' })
+    })
 })
+
 
 // Endpoint to fetch all videos from Google Cloud Storage
 app.get('/videos', async (req, res) => {
