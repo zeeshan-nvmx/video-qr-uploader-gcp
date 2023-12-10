@@ -4,9 +4,12 @@ const { Storage } = require('@google-cloud/storage')
 const QRCode = require('qrcode')
 const path = require('path')
 const fs = require('fs')
+const cors = require('cors')
 
 const app = express()
 const port = process.env.PORT || 5000
+
+app.use(cors())
 
 app.use(express.static(path.join(__dirname, 'client/build')))
 
