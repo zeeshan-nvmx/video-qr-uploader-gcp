@@ -7,7 +7,7 @@ const fs = require('fs')
 const cors = require('cors')
 
 const app = express()
-const port = process.env.PORT || 5000
+const port = process.env.PORT || 8000
 
 app.use(cors())
 
@@ -135,6 +135,35 @@ app.get('/videos', async (req, res) => {
     res.status(500).json({ error: 'Error fetching videos from Google Cloud Storage.' });
   }
 });
+
+// Endpoint to delete videos from Google Cloud Storage
+
+app.delete('/delete/:videoName', async (req, res) => {
+  const videoName = req.params.videoName
+
+  if (!videoName) {
+    return res.status(400).json({ error: 'Video name not provided.' })
+  }
+
+  const file = bucket.file(videoName)
+
+  try {
+    // Check if the file exists before attempting to delete
+    const [exists] = await file.exists()
+
+    if (!exists) {
+      return res.status(404).json({ error: 'File not found in Google Cloud Storage.' })
+    }
+
+    await file.delete()
+
+    return res.json({ message: 'Video deleted successfully from Google Cloud Storage.' })
+  } catch (err) {
+    console.error(err)
+    return res.status(500).json({ error: 'Error deleting video from Google Cloud Storage.' })
+  }
+})
+
 
 app.get('*', (req, res) => {
   res.sendFile(path.join(__dirname + '/client/build/index.html'))
