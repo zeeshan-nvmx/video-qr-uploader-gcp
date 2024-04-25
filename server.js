@@ -12,7 +12,7 @@ const port = process.env.PORT || 8000
 
 app.use(cors())
 
-app.use(express.static(path.join(__dirname, 'client/build')))
+// app.use(express.static(path.join(__dirname, 'client/build')))
 
 // Initialize Google Cloud Storage client with credentials from process.env
 const storage = new Storage({
