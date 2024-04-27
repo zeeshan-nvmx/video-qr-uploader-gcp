@@ -5,7 +5,7 @@
 
 ### 1. create a gcp project.
 ### 2. create a service account and download the service key.
-### 3. put the service key in the root directory.
+### 3. extract the credentials and put them into the .env file. (create the .env file at the root directory )
 ### 4. create a bucket in google cloud storage.
 ### 5. replace the bucket name in code. 
 
