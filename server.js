@@ -1,7 +1,7 @@
 const express = require('express')
 require('dotenv').config()
 const multer = require('multer')
-const { Storage } = require('@google-cloud/storage')
+const { S3Client, PutObjectCommand, ListObjectsV2Command, DeleteObjectCommand, HeadObjectCommand } = require('@aws-sdk/client-s3')
 const QRCode = require('qrcode')
 const path = require('path')
 const fs = require('fs')
@@ -12,20 +12,17 @@ const port = process.env.PORT || 8000
 
 app.use(cors())
 
-// app.use(express.static(path.join(__dirname, 'client/build')))
-
-// Initialize Google Cloud Storage client with credentials from process.env
-const storage = new Storage({
-  projectId: process.env.GCP_PROJECT_ID,
+// Initialize S3 client for Cloudflare R2
+const s3Client = new S3Client({
+  region: 'auto',
+  endpoint: `https://${process.env.CLOUDFLARE_ACCOUNT_ID}.r2.cloudflarestorage.com`,
   credentials: {
-    client_email: process.env.GCP_CLIENT_EMAIL,
-    private_key: process.env.GCP_PRIVATE_KEY.split(String.raw`\n`).join('\n'),
+    accessKeyId: process.env.R2_ACCESS_KEY_ID,
+    secretAccessKey: process.env.R2_SECRET_ACCESS_KEY,
   },
 })
 
-// Create a Cloud Storage bucket reference
-const bucketName = process.env.GCP_BUCKET_NAME
-const bucket = storage.bucket(bucketName)
+const bucketName = process.env.R2_BUCKET_NAME
 
 // Multer configuration for handling file uploads with disk storage
 const upload = multer({
@@ -46,67 +43,69 @@ app.get('/status', async (req, res) => {
   res.json({ status: 'server is up and running successfully' })
 })
 
-// Endpoint to upload videos to Google Cloud Storage from disk storage and deleting the local file after successful upload
+// Endpoint to upload videos to Cloudflare R2
 app.post('/upload', upload.single('video'), async (req, res) => {
   if (!req.file) {
     return res.status(400).json({ error: 'No file uploaded.' })
   }
 
-  const file = bucket.file(req.file.originalname.replace(/\s/g, '-').toLowerCase())
-  const blobStream = file.createWriteStream({
-    metadata: {
-      contentType: req.file.mimetype,
-    },
-    resumable: false,
-  })
+  const fileName = req.file.originalname.replace(/\s/g, '-').toLowerCase()
 
-  blobStream.on('error', (err) => {
-    console.error(err)
-    return res.status(500).json({ error: 'Error uploading file to Google Cloud Storage.' })
-  })
+  try {
+    const fileStream = fs.createReadStream(req.file.path)
 
-  blobStream.on('finish', () => {
-    // Delete the local file after successful upload to GCP
+    const uploadParams = {
+      Bucket: bucketName,
+      Key: fileName,
+      Body: fileStream,
+      ContentType: req.file.mimetype,
+    }
+
+    await s3Client.send(new PutObjectCommand(uploadParams))
+
+    // Delete the local file after successful upload
     fs.unlink(req.file.path, (unlinkErr) => {
       if (unlinkErr) {
         console.error(unlinkErr)
         return res.status(500).json({ error: unlinkErr })
       }
       // Get the public URL of the uploaded file
-      const publicUrl = `https://storage.googleapis.com/${bucketName}/${file.name}`
+      const publicUrl = `${process.env.R2_PUBLIC_DOMAIN}/${fileName}`
       // Respond with success message and URL
-      res.json({ message: 'Video uploaded successfully to Google Cloud Storage', url: publicUrl })
+      res.json({ message: 'Video uploaded successfully to Cloudflare R2', url: publicUrl })
     })
-  })
-
-  // Pipe the file's readable stream to the writable stream of Google Cloud Storage
-  fs.createReadStream(req.file.path)
-    .pipe(blobStream)
-    .on('error', (err) => {
-      console.error(err)
-      return res.status(500).json({ error: 'Error uploading file to Google Cloud Storage.' })
-    })
-})
-
-// Endpoint to fetch all videos from Google Cloud Storage
-app.get('/videos', async (req, res) => {
-  try {
-    const [files] = await bucket.getFiles()
-    if (files.length === 0) {
-      return res.json([])
-    }
-    const videos = files.map((file) => ({
-      name: file.name,
-      url: `https://storage.googleapis.com/${bucketName}/${file.name}`,
-    }))
-    res.json(videos)
   } catch (err) {
     console.error(err)
-    res.status(500).json({ error: 'Error fetching videos from Google Cloud Storage.' })
+    return res.status(500).json({ error: 'Error uploading file to Cloudflare R2.' })
   }
 })
 
-// Endpoint to delete videos from Google Cloud Storage
+// Endpoint to fetch all videos from Cloudflare R2
+app.get('/videos', async (req, res) => {
+  try {
+    const listCommand = new ListObjectsV2Command({
+      Bucket: bucketName,
+    })
+
+    const { Contents = [] } = await s3Client.send(listCommand)
+
+    if (Contents.length === 0) {
+      return res.json([])
+    }
+
+    const videos = Contents.map((file) => ({
+      name: file.Key,
+      url: `${process.env.R2_PUBLIC_DOMAIN}/${file.Key}`,
+    }))
+
+    res.json(videos)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Error fetching videos from Cloudflare R2.' })
+  }
+})
+
+// Endpoint to delete videos from Cloudflare R2
 app.delete('/delete/:videoName', async (req, res) => {
   const videoName = req.params.videoName
 
@@ -114,22 +113,34 @@ app.delete('/delete/:videoName', async (req, res) => {
     return res.status(400).json({ error: 'Video name not provided.' })
   }
 
-  const file = bucket.file(videoName)
-
   try {
     // Check if the file exists before attempting to delete
-    const [exists] = await file.exists()
+    const headCommand = new HeadObjectCommand({
+      Bucket: bucketName,
+      Key: videoName,
+    })
 
-    if (!exists) {
-      return res.status(404).json({ error: 'File not found in Google Cloud Storage.' })
+    try {
+      await s3Client.send(headCommand)
+    } catch (err) {
+      if (err.name === 'NotFound') {
+        return res.status(404).json({ error: 'File not found in Cloudflare R2.' })
+      }
+      throw err
     }
 
-    await file.delete()
+    // Delete the file
+    const deleteCommand = new DeleteObjectCommand({
+      Bucket: bucketName,
+      Key: videoName,
+    })
 
-    return res.json({ message: 'Video deleted successfully from Google Cloud Storage.' })
+    await s3Client.send(deleteCommand)
+
+    return res.json({ message: 'Video deleted successfully from Cloudflare R2.' })
   } catch (err) {
     console.error(err)
-    return res.status(500).json({ error: 'Error deleting video from Google Cloud Storage.' })
+    return res.status(500).json({ error: 'Error deleting video from Cloudflare R2.' })
   }
 })
 
