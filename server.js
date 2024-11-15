@@ -80,8 +80,33 @@ app.post('/upload', upload.single('video'), async (req, res) => {
   }
 })
 
-// Enhanced endpoint to fetch videos from Cloudflare R2 with pagination
+// Endpoint to fetch all videos from Cloudflare R2
 app.get('/videos', async (req, res) => {
+  try {
+    const listCommand = new ListObjectsV2Command({
+      Bucket: bucketName,
+    })
+
+    const { Contents = [] } = await s3Client.send(listCommand)
+
+    if (Contents.length === 0) {
+      return res.json([])
+    }
+
+    const videos = Contents.map((file) => ({
+      name: file.Key,
+      url: `${process.env.R2_PUBLIC_DOMAIN}/${file.Key}`,
+    }))
+
+    res.json(videos)
+  } catch (err) {
+    console.error(err)
+    res.status(500).json({ error: 'Error fetching videos from Cloudflare R2.' })
+  }
+})
+
+// Enhanced endpoint to fetch videos from Cloudflare R2 with pagination
+app.get('/videos-custom', async (req, res) => {
   try {
     // Parse pagination parameters from query string
     const page = parseInt(req.query.page) || 1
