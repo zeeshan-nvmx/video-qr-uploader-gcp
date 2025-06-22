@@ -130,6 +130,79 @@ app.get('/videos', async (req, res) => {
   }
 })
 
+// // Enhanced endpoint to fetch videos from Cloudflare R2 with pagination
+// app.get('/videos-custom', async (req, res) => {
+//   try {
+//     // Parse pagination parameters from query string
+//     const page = parseInt(req.query.page) || 1
+//     const limit = parseInt(req.query.limit) || 10
+
+//     // Validate pagination parameters
+//     if (page < 1 || limit < 1 || limit > 100) {
+//       return res.status(400).json({
+//         error: 'Invalid pagination parameters. Page must be >= 1 and limit must be between 1 and 100.',
+//       })
+//     }
+
+//     // First, get the total count of objects
+//     const listCommand = new ListObjectsV2Command({
+//       Bucket: bucketName,
+//     })
+
+//     const { Contents = [] } = await s3Client.send(listCommand)
+
+//     if (Contents.length === 0) {
+//       return res.json({
+//         videos: [],
+//         pagination: {
+//           total: 0,
+//           page,
+//           limit,
+//           totalPages: 0,
+//         },
+//       })
+//     }
+
+//     // Calculate pagination values
+//     const startIndex = (page - 1) * limit
+//     const endIndex = startIndex + limit
+//     const totalItems = Contents.length
+//     const totalPages = Math.ceil(totalItems / limit)
+
+//     // Validate requested page
+//     if (page > totalPages) {
+//       return res.status(400).json({
+//         error: `Page ${page} does not exist. Total pages available: ${totalPages}`,
+//       })
+//     }
+
+//     // Get the paginated subset of videos
+//     const paginatedContents = Contents.slice(startIndex, endIndex)
+
+//     // Map the videos with their URLs
+//     const videos = paginatedContents.map((file) => ({
+//       name: file.Key,
+//       url: `${process.env.R2_PUBLIC_DOMAIN}/${file.Key}`
+//     }))
+
+//     // Return paginated results with metadata
+//     res.json({
+//       videos,
+//       pagination: {
+//         total: totalItems,
+//         page,
+//         limit,
+//         totalPages,
+//         hasNextPage: page < totalPages,
+//         hasPreviousPage: page > 1,
+//       },
+//     })
+//   } catch (err) {
+//     console.error(err)
+//     res.status(500).json({ error: 'Error fetching videos from Cloudflare R2.' })
+//   }
+// })
+
 // Enhanced endpoint to fetch videos from Cloudflare R2 with pagination
 app.get('/videos-custom', async (req, res) => {
   try {
@@ -144,7 +217,7 @@ app.get('/videos-custom', async (req, res) => {
       })
     }
 
-    // First, get the total count of objects
+    // Fetch all objects from the bucket
     const listCommand = new ListObjectsV2Command({
       Bucket: bucketName,
     })
@@ -163,11 +236,14 @@ app.get('/videos-custom', async (req, res) => {
       })
     }
 
+    // Sort by LastModified in descending order (latest first)
+    const sortedContents = Contents.sort((a, b) => b.LastModified - a.LastModified)
+
     // Calculate pagination values
+    const totalItems = sortedContents.length
+    const totalPages = Math.ceil(totalItems / limit)
     const startIndex = (page - 1) * limit
     const endIndex = startIndex + limit
-    const totalItems = Contents.length
-    const totalPages = Math.ceil(totalItems / limit)
 
     // Validate requested page
     if (page > totalPages) {
@@ -176,16 +252,16 @@ app.get('/videos-custom', async (req, res) => {
       })
     }
 
-    // Get the paginated subset of videos
-    const paginatedContents = Contents.slice(startIndex, endIndex)
+    // Get the paginated subset of videos after sorting
+    const paginatedContents = sortedContents.slice(startIndex, endIndex)
 
-    // Map the videos with their URLs
+    // Map the videos with their URLs (keeping original format)
     const videos = paginatedContents.map((file) => ({
       name: file.Key,
       url: `${process.env.R2_PUBLIC_DOMAIN}/${file.Key}`
     }))
 
-    // Return paginated results with metadata
+    // Return paginated results with metadata (keeping original format)
     res.json({
       videos,
       pagination: {
